@@ -448,43 +448,108 @@ with tab1:
       {bar_html}{legend_html}
     </div>""", unsafe_allow_html=True)
 
-    # Category cards — 3 per row
-    st.markdown('<div class="section-title">Categories</div>', unsafe_allow_html=True)
+    # ── Session state for selected category drilldown ────────────────────────
+    if "selected_cat" not in st.session_state:
+        st.session_state.selected_cat = None
+
+    st.markdown('<div class="section-title">Categories — click any to see details</div>', unsafe_allow_html=True)
+
     cats = [c for c in CAT_ICONS.keys() if c in df["Category"].values]
     rows_of_cats = [cats[i:i+3] for i in range(0, len(cats), 3)]
 
     for row in rows_of_cats:
         cols = st.columns(3)
         for ci, cat in enumerate(row):
-            cat_df = df[df["Category"] == cat]
+            cat_df    = df[df["Category"] == cat]
             cat_done  = len(cat_df[cat_df["Status"] == "Completed"])
             cat_total = len(cat_df)
             cat_high  = len(cat_df[(cat_df["Status"] != "Completed") & (cat_df["Priority"] == "High")])
             icon      = CAT_ICONS.get(cat, "📌")
             pct_cat   = int(cat_done / cat_total * 100) if cat_total else 0
             warn_card = cat_high > 0
-            warn_note = f'<div style="font-size:10px;color:#B5860A;font-family:\'DM Mono\',monospace;margin-top:2px">{cat_high} high priority open</div>' if warn_card else ""
+            filled    = int(pct_cat / 10)
+            bar_str   = "█" * filled + "░" * (10 - filled)
+            warn_str  = f"\n⚠ {cat_high} high priority open" if warn_card else ""
+            btn_label = f"{icon}  {cat}{warn_str}\n{bar_str}  {cat_done}/{cat_total}"
 
             with cols[ci]:
-                card_bg     = "#FFFBEB" if warn_card else "white"
-                card_border = "#F0D890" if warn_card else "rgba(0,0,0,0.1)"
-                st.markdown(
-                    f'<div style="background:{card_bg};border-radius:14px;padding:14px 16px;'
-                    f'border:0.5px solid {card_border};box-shadow:0 1px 8px rgba(74,124,89,0.05);margin-bottom:8px">'
-                    f'<div style="display:flex;align-items:center;gap:10px">'
-                    f'<span style="font-size:22px">{icon}</span>'
-                    f'<div style="flex:1;min-width:0">'
-                    f'<div style="font-size:12px;font-weight:500;color:#2C3E35">{cat}</div>'
-                    f'{warn_note}'
-                    f'<div style="height:3px;background:rgba(0,0,0,0.07);border-radius:2px;margin-top:6px">'
-                    f'<div style="height:3px;border-radius:2px;width:{pct_cat}%;background:#7A9E7E"></div>'
-                    f'</div></div>'
-                    f'<div style="text-align:right;flex-shrink:0">'
-                    f'<div style="font-size:18px;font-weight:500;color:#4A7C59">{cat_done}</div>'
-                    f'<div style="font-size:11px;color:#9CA3AF;font-family:monospace">/{cat_total}</div>'
-                    f'</div></div></div>',
-                    unsafe_allow_html=True,
-                )
+                if st.button(btn_label, key=f"cat_btn_{cat}", use_container_width=True):
+                    if st.session_state.selected_cat == cat:
+                        st.session_state.selected_cat = None
+                    else:
+                        st.session_state.selected_cat = cat
+                    st.rerun()
+
+    # ── Inline drilldown table ────────────────────────────────────────────────
+    if st.session_state.selected_cat:
+        sel_cat  = st.session_state.selected_cat
+        sel_icon = CAT_ICONS.get(sel_cat, "📌")
+        sel_df   = df[df["Category"] == sel_cat].copy()
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        hdr_col, close_col = st.columns([8, 1])
+        with hdr_col:
+            n_done = len(sel_df[sel_df["Status"] == "Completed"])
+            st.markdown(
+                f'<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">'
+                f'<span style="font-size:24px">{sel_icon}</span>'
+                f'<span style="font-size:18px;font-weight:500;color:#2C3E35">{sel_cat}</span>'
+                f'<span style="font-size:12px;color:#9CA3AF;font-family:monospace;margin-left:8px">'
+                f'{n_done}/{len(sel_df)} done</span></div>',
+                unsafe_allow_html=True,
+            )
+        with close_col:
+            if st.button("✕ Close", key="close_drilldown"):
+                st.session_state.selected_cat = None
+                st.rerun()
+
+        rows_html = ""
+        for _, row in sel_df.iterrows():
+            status = str(row.get("Status", ""))
+            owner  = str(row.get("Owner", ""))
+            prio   = str(row.get("Priority", ""))
+            item   = str(row.get("Item", ""))
+            notes  = str(row.get("Notes", ""))
+            sw     = str(row.get("Splitwise", ""))
+            link   = str(row.get("Link", ""))
+
+            chk = check_icon(status)
+            item_html = (f'<a href="{link}" target="_blank" style="color:#4A7C59;text-decoration:none">{item} ↗</a>'
+                         if link.startswith("http") else item)
+            if link and not link.startswith("http"):
+                item_html += f'<div style="font-size:10px;color:#9CA3AF;font-family:monospace;margin-top:2px">{link}</div>'
+
+            strike = "text-decoration:line-through;opacity:0.55;" if status == "Completed" else ""
+            row_bg = ("rgba(209,250,229,0.2)" if status == "Completed" else
+                      "rgba(255,248,225,0.45)" if prio == "High" and status != "Completed" else "#fff")
+
+            rows_html += (
+                f'<tr style="background:{row_bg};border-top:0.5px solid rgba(0,0,0,0.07)">'
+                f'<td style="padding:10px 12px;width:30px">{chk}</td>'
+                f'<td style="padding:10px 12px;font-weight:500;{strike}max-width:200px">{item_html}</td>'
+                f'<td style="padding:10px 12px;color:#6B7280;font-size:12px;max-width:220px">{notes or "—"}</td>'
+                f'<td style="padding:10px 12px">{status_badge(status)}</td>'
+                f'<td style="padding:10px 12px">{owner_pill(owner)}</td>'
+                f'<td style="padding:10px 12px">{priority_pill(prio)}</td>'
+                f'<td style="padding:10px 12px;font-size:11px;font-family:monospace;'
+                f'color:{"#4A7C59" if sw else "#D1D5DB"}">{sw or "—"}</td>'
+                f'</tr>'
+            )
+
+        def th(label):
+            return (f'<th style="padding:9px 12px;text-align:left;font-size:11px;font-family:monospace;'
+                    f'color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;'
+                    f'background:rgba(0,0,0,0.02);border-bottom:0.5px solid rgba(0,0,0,0.08)">{label}</th>')
+
+        table_html = (
+            f'<div style="background:white;border-radius:14px;border:0.5px solid rgba(0,0,0,0.1);'
+            f'overflow:hidden;box-shadow:0 1px 8px rgba(74,124,89,0.05)">'
+            f'<table style="width:100%;border-collapse:collapse;font-size:13px">'
+            f'<thead><tr>{th("")}{th("Item")}{th("Notes")}{th("Status")}{th("Owner")}{th("Priority")}{th("Splitwise")}</tr></thead>'
+            f'<tbody>{rows_html}</tbody></table></div>'
+        )
+        st.markdown(table_html, unsafe_allow_html=True)
 
 
 # ═══ TAB 2: TASKS ═══
