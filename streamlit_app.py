@@ -57,23 +57,23 @@ IDEA_CATS = [
 
 SEED_IDEAS = {
     "decor": [
-        {"text": "Oversized sage balloon arch at entrance", "author": "Savitri", "score": 3},
-        {"text": "Pressed flower place cards at each seat", "author": "Kirsten", "score": 2},
+        {"id": 1, "text": "Oversized sage balloon arch at entrance", "author": "Savitri", "score": 3},
+        {"id": 2, "text": "Pressed flower place cards at each seat", "author": "Kirsten", "score": 2},
     ],
     "food": [
-        {"text": "Cantaloupe + prosciutto skewers as apps", "author": "Jessica", "score": 4},
-        {"text": "Mini uncrustable sliders with fancy labels", "author": "Carly", "score": 5},
+        {"id": 3, "text": "Cantaloupe + prosciutto skewers as apps", "author": "Jessica", "score": 4},
+        {"id": 4, "text": "Mini uncrustable sliders with fancy labels", "author": "Carly", "score": 5},
     ],
     "drinks": [
-        {"text": "Nicole's drink: Hugo Spritz with elderflower", "author": "Carly", "score": 3},
-        {"text": "Zach's drink: smoky mezcal aperol riff", "author": "Carly", "score": 2},
+        {"id": 5, "text": "Nicole's drink: Hugo Spritz with elderflower", "author": "Carly", "score": 3},
+        {"id": 6, "text": "Zach's drink: smoky mezcal aperol riff", "author": "Carly", "score": 2},
     ],
     "gifts": [
-        {"text": "Passport-style booklet favor with trip tips", "author": "Kirsten", "score": 1},
-        {"text": "Custom airline baggage tag with baby's name", "author": "Jessica", "score": 4},
+        {"id": 7, "text": "Passport-style booklet favor with trip tips", "author": "Kirsten", "score": 1},
+        {"id": 8, "text": "Custom airline baggage tag with baby's name", "author": "Jessica", "score": 4},
     ],
     "activities": [
-        {"text": "Destination bingo — guests pick where baby travels first", "author": "Savitri", "score": 3},
+        {"id": 9, "text": "Destination bingo — guests pick where baby travels first", "author": "Savitri", "score": 3},
     ],
     "other": [],
 }
@@ -466,23 +466,25 @@ with tab1:
             warn_note = f'<div style="font-size:10px;color:#B5860A;font-family:\'DM Mono\',monospace;margin-top:2px">{cat_high} high priority open</div>' if warn_card else ""
 
             with cols[ci]:
-                st.markdown(f"""
-                <div class="cat-card {'cat-card-warn' if warn_card else ''}">
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <span style="font-size:22px">{icon}</span>
-                    <div style="flex:1;min-width:0">
-                      <div style="font-size:12px;font-weight:500;color:#2C3E35">{cat}</div>
-                      {warn_note}
-                      <div style="height:3px;background:rgba(0,0,0,0.07);border-radius:2px;margin-top:6px">
-                        <div style="height:3px;border-radius:2px;width:{pct_cat}%;background:#7A9E7E"></div>
-                      </div>
-                    </div>
-                    <div style="text-align:right;flex-shrink:0">
-                      <div style="font-size:18px;font-weight:500;color:#4A7C59">{cat_done}</div>
-                      <div style="font-size:11px;color:#9CA3AF;font-family:'DM Mono',monospace">/{cat_total}</div>
-                    </div>
-                  </div>
-                </div>""", unsafe_allow_html=True)
+                card_bg     = "#FFFBEB" if warn_card else "white"
+                card_border = "#F0D890" if warn_card else "rgba(0,0,0,0.1)"
+                st.markdown(
+                    f'<div style="background:{card_bg};border-radius:14px;padding:14px 16px;'
+                    f'border:0.5px solid {card_border};box-shadow:0 1px 8px rgba(74,124,89,0.05);margin-bottom:8px">'
+                    f'<div style="display:flex;align-items:center;gap:10px">'
+                    f'<span style="font-size:22px">{icon}</span>'
+                    f'<div style="flex:1;min-width:0">'
+                    f'<div style="font-size:12px;font-weight:500;color:#2C3E35">{cat}</div>'
+                    f'{warn_note}'
+                    f'<div style="height:3px;background:rgba(0,0,0,0.07);border-radius:2px;margin-top:6px">'
+                    f'<div style="height:3px;border-radius:2px;width:{pct_cat}%;background:#7A9E7E"></div>'
+                    f'</div></div>'
+                    f'<div style="text-align:right;flex-shrink:0">'
+                    f'<div style="font-size:18px;font-weight:500;color:#4A7C59">{cat_done}</div>'
+                    f'<div style="font-size:11px;color:#9CA3AF;font-family:monospace">/{cat_total}</div>'
+                    f'</div></div></div>',
+                    unsafe_allow_html=True,
+                )
 
 
 # ═══ TAB 2: TASKS ═══
@@ -565,99 +567,107 @@ with tab2:
 
 # ═══ TAB 3: IDEAS ═══
 with tab3:
-    st.markdown("""
-    <div style="margin-bottom:16px">
-      <div class="section-title" style="margin-top:0">Ideas board</div>
-      <div style="font-size:13px;color:#6B7280">Drop suggestions — anyone can upvote or downvote to help the hosts decide what makes the cut.</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(
+        '<p style="font-size:13px;color:#6B7280;margin-bottom:20px">'
+        'Drop suggestions below — anyone can upvote or downvote to help the hosts decide what makes the cut.</p>',
+        unsafe_allow_html=True,
+    )
 
-    # 2 columns of idea categories
-    left_cats  = IDEA_CATS[:3]
-    right_cats = IDEA_CATS[3:]
+    col_l, col_r = st.columns(2)
+    col_map = {0: col_l, 1: col_r}
 
-    for col_ideas, cat_group in zip(st.columns(2), [left_cats, right_cats]):
-        with col_ideas:
-            for cat_key, cat_icon, cat_label in cat_group:
-                st.markdown(f"""
-                <div style="background:white;border-radius:14px;padding:16px 18px;border:0.5px solid rgba(0,0,0,0.1);box-shadow:0 1px 8px rgba(74,124,89,0.05);margin-bottom:14px">
-                  <div style="font-size:14px;font-weight:500;color:#2C3E35;margin-bottom:10px">{cat_icon} &nbsp;{cat_label}</div>
-                """, unsafe_allow_html=True)
+    for cat_idx, (cat_key, cat_icon, cat_label) in enumerate(IDEA_CATS):
+        with col_map[cat_idx % 2]:
+            # ── Card header ──────────────────────────────────────────────
+            st.markdown(
+                f'<div style="background:white;border-radius:14px;padding:16px 18px 4px;'
+                f'border:0.5px solid rgba(0,0,0,0.1);box-shadow:0 1px 8px rgba(74,124,89,0.05);margin-bottom:4px">'
+                f'<div style="font-size:14px;font-weight:500;color:#2C3E35;margin-bottom:2px">'
+                f'{cat_icon}&nbsp; {cat_label}</div></div>',
+                unsafe_allow_html=True,
+            )
 
-                ideas_sorted = sorted(
-                    st.session_state.ideas.get(cat_key, []),
-                    key=lambda x: x["score"],
-                    reverse=True
+            ideas_sorted = sorted(
+                st.session_state.ideas.get(cat_key, []),
+                key=lambda x: x.get("score", 0),
+                reverse=True,
+            )
+
+            if not ideas_sorted:
+                st.caption("No suggestions yet — be the first!")
+
+            # ── Each idea row ────────────────────────────────────────────
+            for idea in ideas_sorted:
+                idea_id  = idea.get("id", id(idea))  # fallback to object id
+                idea_uid = f"{cat_key}_{idea_id}"
+                score    = idea.get("score", 0)
+                voted    = st.session_state.voted.get(idea_uid)
+                score_color = "#4A7C59" if score > 0 else ("#B91C1C" if score < 0 else "#9CA3AF")
+
+                # Text + score in HTML
+                st.markdown(
+                    f'<div style="border-top:0.5px solid rgba(0,0,0,0.07);padding:8px 0 4px">'
+                    f'<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">'
+                    f'<div style="flex:1">'
+                    f'<div style="font-size:13px;color:#1F2937;line-height:1.4">{idea["text"]}</div>'
+                    f'<div style="font-size:11px;color:#9CA3AF;margin-top:2px">— {idea["author"]}</div>'
+                    f'</div>'
+                    f'<div style="font-size:13px;font-weight:600;color:{score_color};'
+                    f'font-family:monospace;min-width:28px;text-align:right">{score:+d}</div>'
+                    f'</div></div>',
+                    unsafe_allow_html=True,
                 )
 
-                if not ideas_sorted:
-                    st.markdown('<div style="font-size:12px;color:#9CA3AF;padding:6px 0 10px;font-family:\'DM Mono\',monospace">No suggestions yet — be the first!</div>', unsafe_allow_html=True)
-
-                for idea in ideas_sorted:
-                    idea_uid = f"{cat_key}_{idea['id']}"
-                    score = idea["score"]
-                    voted = st.session_state.voted.get(idea_uid)
-                    score_color = "#4A7C59" if score > 0 else ("#B91C1C" if score < 0 else "#9CA3AF")
-
-                    st.markdown(f"""
-                    <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:0.5px solid rgba(0,0,0,0.07)">
-                      <div style="flex:1">
-                        <div style="font-size:13px;color:#1F2937;line-height:1.4">{idea['text']}</div>
-                        <div style="font-size:11px;color:#9CA3AF;margin-top:3px">— {idea['author']}</div>
-                      </div>
-                      <div style="font-size:13px;font-weight:500;color:{score_color};font-family:'DM Mono',monospace;min-width:28px;text-align:center;padding-top:2px">{score:+d}</div>
-                    </div>""", unsafe_allow_html=True)
-
-                    v1, v2, v3 = st.columns([1, 1, 3])
-                    with v1:
-                        up_style = "🟢" if voted == "up" else "▲"
-                        if st.button(up_style, key=f"up_{idea_uid}", help="Upvote"):
-                            ideas_list = st.session_state.ideas[cat_key]
-                            for item in ideas_list:
-                                if item["id"] == idea["id"]:
-                                    if voted == "up":
-                                        item["score"] -= 1
-                                        st.session_state.voted[idea_uid] = None
-                                    else:
-                                        if voted == "down":
-                                            item["score"] += 1
-                                        item["score"] += 1
-                                        st.session_state.voted[idea_uid] = "up"
-                            st.rerun()
-                    with v2:
-                        dn_style = "🔴" if voted == "down" else "▼"
-                        if st.button(dn_style, key=f"dn_{idea_uid}", help="Downvote"):
-                            ideas_list = st.session_state.ideas[cat_key]
-                            for item in ideas_list:
-                                if item["id"] == idea["id"]:
+                # Vote buttons as real Streamlit widgets
+                b1, b2, b3 = st.columns([1, 1, 6])
+                with b1:
+                    label_up = "👍" if voted == "up" else "▲"
+                    if st.button(label_up, key=f"up_{idea_uid}"):
+                        for item in st.session_state.ideas[cat_key]:
+                            if item.get("id", id(item)) == idea_id:
+                                if voted == "up":
+                                    item["score"] -= 1
+                                    st.session_state.voted[idea_uid] = None
+                                else:
                                     if voted == "down":
                                         item["score"] += 1
-                                        st.session_state.voted[idea_uid] = None
-                                    else:
-                                        if voted == "up":
-                                            item["score"] -= 1
+                                    item["score"] += 1
+                                    st.session_state.voted[idea_uid] = "up"
+                        st.rerun()
+                with b2:
+                    label_dn = "👎" if voted == "down" else "▼"
+                    if st.button(label_dn, key=f"dn_{idea_uid}"):
+                        for item in st.session_state.ideas[cat_key]:
+                            if item.get("id", id(item)) == idea_id:
+                                if voted == "down":
+                                    item["score"] += 1
+                                    st.session_state.voted[idea_uid] = None
+                                else:
+                                    if voted == "up":
                                         item["score"] -= 1
-                                        st.session_state.voted[idea_uid] = "down"
-                            st.rerun()
+                                    item["score"] -= 1
+                                    st.session_state.voted[idea_uid] = "down"
+                        st.rerun()
 
-                st.markdown("</div>", unsafe_allow_html=True)
-
-                # Add idea form
-                with st.form(key=f"form_{cat_key}", clear_on_submit=True):
-                    new_text   = st.text_input("Suggestion", placeholder="Add a suggestion...", label_visibility="collapsed", key=f"text_{cat_key}")
-                    new_author = st.text_input("Your name", placeholder="Your name", label_visibility="collapsed", key=f"author_{cat_key}")
-                    submitted  = st.form_submit_button("+ Add")
-                    if submitted and new_text.strip():
+            # ── Add idea form ────────────────────────────────────────────
+            st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
+            with st.form(key=f"form_{cat_key}", clear_on_submit=True):
+                new_text   = st.text_input("Suggestion", placeholder="Add a suggestion...", label_visibility="collapsed")
+                new_author = st.text_input("Your name",  placeholder="Your name",           label_visibility="collapsed")
+                if st.form_submit_button("+ Add idea"):
+                    if new_text.strip():
                         nid = st.session_state.next_id
                         st.session_state.next_id += 1
                         if cat_key not in st.session_state.ideas:
                             st.session_state.ideas[cat_key] = []
                         st.session_state.ideas[cat_key].append({
-                            "id": nid,
-                            "text": new_text.strip(),
+                            "id":     nid,
+                            "text":   new_text.strip(),
                             "author": new_author.strip() or "Anonymous",
-                            "score": 0,
+                            "score":  0,
                         })
                         st.rerun()
+            st.markdown("<div style='height:16px'></div>", unsafe_allow_html=True)
 
 # FOOTER
 st.markdown(f"""
