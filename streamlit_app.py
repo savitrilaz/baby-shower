@@ -1,674 +1,667 @@
-import { useState, useEffect, useCallback } from "react";
+import streamlit as st
+import pandas as pd
+import requests
+import io
 
-// ─── CONFIG ──────────────────────────────────────────────────────────────────
-const SHEET_ID = "1fUsJxGXaovwEEhiP6vjV62xDo1fQ6wlaQ9DGaHMFREE";
-const SPLITWISE_URL = "https://splitwise.com";
+# CONFIG
+SHEET_ID = "1fUsJxGXaovwEEhiP6vjV62xDo1fQ6wlaQ9DGaHMFREE"
+SPLITWISE_URL = "https://splitwise.com"
 
-// To enable live sync: File → Share → Anyone with link → Viewer
-// The dashboard fetches the public CSV export automatically.
-function csvUrl(sheet) {
-  return `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheet)}`;
+CAT_ICONS = {
+    "Venue & Logistics": "🏛",
+    "Invitations & Guest Experience": "✉️",
+    "Food": "🍽️",
+    "Drinks": "🥂",
+    "Decor & Styling": "🌿",
+    "Activities & Games": "🎯",
+    "Keepsakes & Sentimental Touches": "💌",
+    "Favors & Gifts": "🎁",
+    "Budget & Coordination": "📊",
 }
 
-// ─── CONSTANTS ────────────────────────────────────────────────────────────────
-const CAT_ICONS = {
-  "Venue & Logistics": "🏛",
-  "Invitations & Guest Experience": "✉️",
-  "Food": "🍽",
-  "Drinks": "🥂",
-  "Decor & Styling": "🌿",
-  "Activities & Games": "🎯",
-  "Keepsakes & Sentimental Touches": "💌",
-  "Favors & Gifts": "🎁",
-  "Budget & Coordination": "📊",
-};
-
-const STATUS_CFG = {
-  "Completed":       { bg: "#D1FAE5", color: "#065F46" },
-  "In Progress":     { bg: "#DBEAFE", color: "#1E40AF" },
-  "Not Yet Started": { bg: "#F3F4F6", color: "#374151" },
-  "Considering":     { bg: "#FFF3CD", color: "#856404" },
-};
-
-const PRIO_CFG = {
-  High:   { bg: "#FEE2E2", color: "#B91C1C" },
-  Medium: { bg: "#FEF3C7", color: "#92400E" },
-  Low:    { bg: "#EAF2EA", color: "#4A7C59" },
-};
-
-const OWNER_CFG = {
-  Jessica: { bg: "#F2E4E1", color: "#8C3A3A" },
-  Carly:   { bg: "#E4EAF2", color: "#2C4A8C" },
-  Kirsten: { bg: "#EAF2E4", color: "#2C6B3A" },
-  Savitri: { bg: "#F0E4F2", color: "#6B2C8C" },
-};
-
-const STATUS_BAR_COLORS = {
-  "Completed":       "#7A9E7E",
-  "In Progress":     "#60A5FA",
-  "Not Yet Started": "#D1D5DB",
-  "Considering":     "#FBBF24",
-};
-
-const IDEA_CATS = [
-  { key: "decor",      label: "Decor & balloons",   icon: "🌿" },
-  { key: "food",       label: "Food ideas",          icon: "🍽" },
-  { key: "drinks",     label: "Signature drinks",    icon: "🥂" },
-  { key: "gifts",      label: "Favors & gift bags",  icon: "🎁" },
-  { key: "activities", label: "Activities & games",  icon: "🎯" },
-  { key: "other",      label: "Other / misc",        icon: "✨" },
-];
-
-const SEED_IDEAS = {
-  decor: [
-    { id: 1, text: "Oversized sage balloon arch at entrance", author: "Savitri", score: 3, voted: null },
-    { id: 2, text: "Pressed flower place cards at each seat", author: "Kirsten", score: 2, voted: null },
-  ],
-  food: [
-    { id: 3, text: "Cantaloupe + prosciutto skewers as apps", author: "Jessica", score: 4, voted: null },
-    { id: 4, text: "Mini uncrustable sliders with fancy labels", author: "Carly", score: 5, voted: null },
-  ],
-  drinks: [
-    { id: 5, text: "Nicole's drink: Hugo Spritz with elderflower", author: "Carly", score: 3, voted: null },
-    { id: 6, text: "Zach's drink: smoky mezcal aperol riff", author: "Carly", score: 2, voted: null },
-  ],
-  gifts: [
-    { id: 7, text: "Passport-style booklet favor with trip tips", author: "Kirsten", score: 1, voted: null },
-    { id: 8, text: "Custom airline baggage tag with baby's name", author: "Jessica", score: 4, voted: null },
-  ],
-  activities: [
-    { id: 9, text: "Destination bingo — guests pick where baby travels first", author: "Savitri", score: 3, voted: null },
-  ],
-  other: [],
-};
-
-// ─── CSV PARSER ───────────────────────────────────────────────────────────────
-function parseCSV(text) {
-  const lines = text.split(/\r?\n/);
-  return lines.map(line => {
-    const cells = [];
-    let cur = "", inQ = false;
-    for (let i = 0; i < line.length; i++) {
-      const c = line[i];
-      if (c === '"') { inQ = !inQ; }
-      else if (c === "," && !inQ) { cells.push(cur.trim()); cur = ""; }
-      else { cur += c; }
-    }
-    cells.push(cur.trim());
-    return cells;
-  });
+STATUS_COLORS = {
+    "Completed":        "#D1FAE5",
+    "In Progress":      "#DBEAFE",
+    "Not Yet Started":  "#F3F4F6",
+    "Considering":      "#FFF3CD",
 }
 
-function sheetToTasks(text) {
-  const rows = parseCSV(text);
-  let hi = rows.findIndex(r => r[0]?.replace(/"/g, "").trim() === "Category");
-  if (hi < 0) hi = 0;
-  const hdrs = rows[hi].map(h => h.replace(/"/g, "").trim().toLowerCase());
-  const col = (...aliases) => hdrs.findIndex(h => aliases.some(a => h.includes(a)));
-  const C = {
-    cat: col("category"), item: col("item name"), desc: col("description", "notes"),
-    status: col("status"), owner: col("owner"), priority: col("priority"),
-    link: col("link"), sw: col("splitwise"),
-  };
-  return rows.slice(hi + 1).map((r, i) => {
-    const cat  = r[C.cat]?.replace(/"/g, "").trim();
-    const item = r[C.item]?.replace(/"/g, "").trim();
-    if (!cat || !item || cat === "Category") return null;
-    return {
-      id: i, cat, item,
-      desc:     r[C.desc]?.replace(/"/g, "").trim() || "",
-      status:   r[C.status]?.replace(/"/g, "").trim() || "Not Yet Started",
-      owner:    r[C.owner]?.replace(/"/g, "").trim() || "",
-      priority: r[C.priority]?.replace(/"/g, "").trim() || "",
-      link:     r[C.link]?.replace(/"/g, "").trim() || "",
-      sw:       r[C.sw]?.replace(/"/g, "").trim() || "",
-    };
-  }).filter(Boolean);
+STATUS_TEXT = {
+    "Completed":        "#065F46",
+    "In Progress":      "#1E40AF",
+    "Not Yet Started":  "#374151",
+    "Considering":      "#856404",
 }
 
-// ─── TINY UI ATOMS ────────────────────────────────────────────────────────────
-const mono = { fontFamily: "'DM Mono', monospace" };
-
-function Pill({ label, bg, color, size = 11 }) {
-  return (
-    <span style={{
-      display: "inline-flex", alignItems: "center",
-      padding: "2px 9px", borderRadius: 12,
-      fontSize: size, fontWeight: 600, whiteSpace: "nowrap",
-      background: bg, color,
-    }}>{label}</span>
-  );
+PRIORITY_COLORS = {
+    "High":   ("#FEE2E2", "#B91C1C"),
+    "Medium": ("#FEF3C7", "#92400E"),
+    "Low":    ("#EAF2EA", "#4A7C59"),
 }
 
-function StatusBadge({ s }) {
-  const c = STATUS_CFG[s] || { bg: "#F3F4F6", color: "#374151" };
-  return <Pill label={s} bg={c.bg} color={c.color} />;
+OWNER_COLORS = {
+    "Jessica": ("#F2E4E1", "#8C3A3A"),
+    "Carly":   ("#E4EAF2", "#2C4A8C"),
+    "Kirsten": ("#EAF2E4", "#2C6B3A"),
+    "Savitri": ("#F0E4F2", "#6B2C8C"),
 }
 
-function OwnerChip({ o }) {
-  if (!o) return <span style={{ fontSize: 12, color: "#9CA3AF" }}>—</span>;
-  const c = OWNER_CFG[o] || { bg: "#F3F4F6", color: "#555" };
-  return <Pill label={o} bg={c.bg} color={c.color} />;
+IDEA_CATS = [
+    ("decor",       "🌿", "Decor & balloons"),
+    ("food",        "🍽️", "Food ideas"),
+    ("drinks",      "🥂", "Signature drinks"),
+    ("gifts",       "🎁", "Favors & gift bags"),
+    ("activities",  "🎯", "Activities & games"),
+    ("other",       "✨", "Other / misc"),
+]
+
+SEED_IDEAS = {
+    "decor": [
+        {"text": "Oversized sage balloon arch at entrance", "author": "Savitri", "score": 3},
+        {"text": "Pressed flower place cards at each seat", "author": "Kirsten", "score": 2},
+    ],
+    "food": [
+        {"text": "Cantaloupe + prosciutto skewers as apps", "author": "Jessica", "score": 4},
+        {"text": "Mini uncrustable sliders with fancy labels", "author": "Carly", "score": 5},
+    ],
+    "drinks": [
+        {"text": "Nicole's drink: Hugo Spritz with elderflower", "author": "Carly", "score": 3},
+        {"text": "Zach's drink: smoky mezcal aperol riff", "author": "Carly", "score": 2},
+    ],
+    "gifts": [
+        {"text": "Passport-style booklet favor with trip tips", "author": "Kirsten", "score": 1},
+        {"text": "Custom airline baggage tag with baby's name", "author": "Jessica", "score": 4},
+    ],
+    "activities": [
+        {"text": "Destination bingo — guests pick where baby travels first", "author": "Savitri", "score": 3},
+    ],
+    "other": [],
 }
 
-function PriorityPill({ p }) {
-  if (!p) return null;
-  const c = PRIO_CFG[p] || PRIO_CFG.Medium;
-  return <Pill label={p} bg={c.bg} color={c.color} />;
+# PAGE CONFIG
+st.set_page_config(
+    page_title="Baby's First Flight",
+    page_icon="✈️",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# CSS
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Cormorant Garamond', Georgia, serif;
 }
 
-function CheckBox({ status }) {
-  const done = status === "Completed";
-  const prog = status === "In Progress";
-  return (
-    <div style={{
-      width: 17, height: 17, borderRadius: 4, flexShrink: 0,
-      border: `1.5px solid ${done ? "#7A9E7E" : prog ? "#60A5FA" : "#D1D5DB"}`,
-      background: done ? "#7A9E7E" : prog ? "#DBEAFE" : "transparent",
-      display: "flex", alignItems: "center", justifyContent: "center",
-    }}>
-      {done && (
-        <svg width="10" height="10" viewBox="0 0 10 10">
-          <polyline points="1.5,5 4,7.5 8.5,2.5" stroke="#fff" strokeWidth="1.5" fill="none" strokeLinecap="round" />
-        </svg>
-      )}
-      {prog && <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#3B82F6" }} />}
-    </div>
-  );
+.main { background: linear-gradient(145deg, #FDFAF4 0%, #F7F2EA 40%, #EAF2EA 100%); }
+
+.block-container { padding-top: 0 !important; max-width: 1200px; }
+
+.header-bar {
+    background: #2C3E35;
+    padding: 18px 32px;
+    margin: -1rem -1rem 1.5rem -1rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-radius: 0;
 }
 
-function PlaneIcon({ size = 18, color = "#C8DCC8" }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M21 16v-2l-8-5V3.5a1.5 1.5 0 0 0-3 0V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z" fill={color} />
-    </svg>
-  );
+.header-title { font-size: 22px; font-weight: 500; color: #FDFAF4; }
+.header-sub { font-size: 11px; color: #B8C4CC; font-family: 'DM Mono', monospace; letter-spacing: 0.07em; margin-top: 2px; }
+.header-links { display: flex; gap: 10px; align-items: center; }
+
+.kpi-card {
+    background: white;
+    border-radius: 14px;
+    padding: 18px 20px;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    box-shadow: 0 1px 8px rgba(74,124,89,0.05);
+    height: 100%;
+}
+.kpi-label { font-size: 11px; font-family: 'DM Mono', monospace; color: #9CA3AF; letter-spacing: 0.07em; text-transform: uppercase; margin-bottom: 8px; }
+.kpi-value { font-size: 48px; font-weight: 300; line-height: 1; color: #4A7C59; }
+.kpi-value-blue { font-size: 48px; font-weight: 300; line-height: 1; color: #1E40AF; }
+.kpi-value-amber { font-size: 48px; font-weight: 300; line-height: 1; color: #B5860A; }
+.kpi-sub { font-size: 13px; color: #6B7280; margin-top: 5px; }
+
+.status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    font-family: 'DM Mono', monospace;
+    white-space: nowrap;
 }
 
-// ─── TASK TABLE ───────────────────────────────────────────────────────────────
-function TaskTable({ tasks, onBack, title, icon }) {
-  const [ownerF, setOwnerF]   = useState("All");
-  const [statusF, setStatusF] = useState("All");
+.section-title { font-size: 16px; font-weight: 500; color: #2C3E35; margin-bottom: 12px; margin-top: 20px; }
 
-  const owners   = ["All", ...new Set(tasks.map(t => t.owner).filter(Boolean))];
-  const statuses = ["All", "Completed", "In Progress", "Not Yet Started", "Considering"];
+.cat-card {
+    background: white;
+    border-radius: 14px;
+    padding: 14px 16px;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    cursor: pointer;
+    transition: transform 0.1s;
+    margin-bottom: 8px;
+}
+.cat-card:hover { transform: translateY(-2px); }
+.cat-card-warn { background: #FFFBEB; border-color: #F0D890; }
 
-  const filtered = tasks.filter(t =>
-    (ownerF  === "All" || t.owner  === ownerF) &&
-    (statusF === "All" || t.status === statusF)
-  );
-
-  const fBtn = (val, active, set) => (
-    <button key={val} onClick={() => set(val)} style={{
-      padding: "4px 11px", borderRadius: 14,
-      border: "0.5px solid",
-      borderColor: active ? "#2C3E35" : "rgba(0,0,0,0.12)",
-      cursor: "pointer", fontSize: 11, ...mono,
-      background: active ? "#2C3E35" : "rgba(0,0,0,0.03)",
-      color: active ? "#FDFAF4" : "#6B7280",
-      transition: "all 0.12s",
-    }}>{val}</button>
-  );
-
-  const thStyle = { padding: "9px 12px", textAlign: "left", fontSize: 11, ...mono, color: "#9CA3AF", letterSpacing: "0.05em", textTransform: "uppercase", fontWeight: 400, background: "rgba(0,0,0,0.02)", borderBottom: "0.5px solid rgba(0,0,0,0.08)" };
-  const tdStyle = { padding: "11px 12px", verticalAlign: "middle", borderTop: "0.5px solid rgba(0,0,0,0.07)" };
-
-  return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16, flexWrap: "wrap" }}>
-        {onBack && (
-          <button onClick={onBack} style={{ padding: "6px 14px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.12)", cursor: "pointer", fontSize: 12, ...mono, background: "rgba(0,0,0,0.03)", color: "#6B7280" }}>
-            ← All categories
-          </button>
-        )}
-        {icon && <span style={{ fontSize: 22 }}>{icon}</span>}
-        <span style={{ fontSize: 16, fontWeight: 500, color: "#2C3E35" }}>{title}</span>
-        <span style={{ marginLeft: "auto", ...mono, fontSize: 11, color: "#9CA3AF" }}>{filtered.length} items</span>
-      </div>
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8, alignItems: "center" }}>
-        <span style={{ ...mono, fontSize: 11, color: "#9CA3AF" }}>OWNER</span>
-        {owners.map(o => fBtn(o, ownerF === o, setOwnerF))}
-      </div>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
-        <span style={{ ...mono, fontSize: 11, color: "#9CA3AF" }}>STATUS</span>
-        {statuses.map(s => fBtn(s, statusF === s, setStatusF))}
-      </div>
-
-      <div style={{ background: "#fff", borderRadius: 14, border: "0.5px solid rgba(0,0,0,0.1)", overflow: "hidden", boxShadow: "0 1px 8px rgba(74,124,89,0.05)" }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr>
-              <th style={{ ...thStyle, width: 30 }}></th>
-              <th style={thStyle}>Item</th>
-              <th style={thStyle}>Notes</th>
-              <th style={thStyle}>Status</th>
-              <th style={thStyle}>Owner</th>
-              <th style={thStyle}>Priority</th>
-              <th style={thStyle}>Splitwise owed to</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.length === 0 && (
-              <tr><td colSpan={7} style={{ padding: 28, textAlign: "center", color: "#9CA3AF", ...mono, fontSize: 12 }}>No items match</td></tr>
-            )}
-            {filtered.map((t, i) => {
-              const rowBg =
-                t.status === "Completed" ? "rgba(209,250,229,0.15)" :
-                (t.priority === "High" && t.status !== "Completed") ? "rgba(255,248,225,0.4)" :
-                i % 2 === 0 ? "#fff" : "rgba(234,242,234,0.2)";
-              return (
-                <tr key={t.id} style={{ background: rowBg }}>
-                  <td style={{ ...tdStyle, paddingRight: 4 }}><CheckBox status={t.status} /></td>
-                  <td style={{ ...tdStyle, fontWeight: 500, color: t.status === "Completed" ? "#9CA3AF" : "#1F2937", maxWidth: 200, textDecoration: t.status === "Completed" ? "line-through" : "none", opacity: t.status === "Completed" ? 0.7 : 1 }}>
-                    {t.link && t.link.startsWith("http")
-                      ? <a href={t.link} target="_blank" rel="noopener noreferrer" style={{ color: "#4A7C59", textDecoration: "none" }}>{t.item} ↗</a>
-                      : t.item}
-                    {t.link && !t.link.startsWith("http") && t.link && (
-                      <div style={{ fontSize: 10, color: "#9CA3AF", ...mono, marginTop: 2 }}>{t.link}</div>
-                    )}
-                  </td>
-                  <td style={{ ...tdStyle, color: "#6B7280", fontSize: 12, maxWidth: 220 }}>{t.desc || "—"}</td>
-                  <td style={tdStyle}><StatusBadge s={t.status} /></td>
-                  <td style={tdStyle}><OwnerChip o={t.owner} /></td>
-                  <td style={tdStyle}><PriorityPill p={t.priority} /></td>
-                  <td style={{ ...tdStyle, ...mono, fontSize: 11, color: t.sw ? "#4A7C59" : "#D1D5DB" }}>{t.sw || "—"}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+.idea-card {
+    background: white;
+    border-radius: 14px;
+    padding: 16px 18px;
+    border: 0.5px solid rgba(0,0,0,0.1);
+    box-shadow: 0 1px 8px rgba(74,124,89,0.05);
+    margin-bottom: 12px;
 }
 
-// ─── IDEAS BOARD ──────────────────────────────────────────────────────────────
-function IdeasBoard({ ideas, setIdeas, nextId, setNextId }) {
-  const [inputs, setInputs] = useState({});
-  const [authors, setAuthors] = useState({});
-
-  const vote = (catKey, id, dir) => {
-    setIdeas(prev => {
-      const next = { ...prev, [catKey]: prev[catKey].map(idea => {
-        if (idea.id !== id) return idea;
-        const wasVoted = idea.voted === dir;
-        const scoreChange = wasVoted
-          ? (dir === "up" ? -1 : 1)
-          : (idea.voted ? (idea.voted === "up" ? -1 : 1) : 0) + (dir === "up" ? 1 : -1);
-        return { ...idea, score: idea.score + scoreChange, voted: wasVoted ? null : dir };
-      })};
-      return next;
-    });
-  };
-
-  const addIdea = (catKey) => {
-    const text = (inputs[catKey] || "").trim();
-    const author = (authors[catKey] || "").trim() || "Anonymous";
-    if (!text) return;
-    const newIdea = { id: nextId, text, author, score: 0, voted: null };
-    setIdeas(prev => ({ ...prev, [catKey]: [...(prev[catKey] || []), newIdea] }));
-    setNextId(n => n + 1);
-    setInputs(prev => ({ ...prev, [catKey]: "" }));
-  };
-
-  return (
-    <div>
-      <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 16, fontWeight: 500, color: "#2C3E35", marginBottom: 4 }}>Ideas board</div>
-        <div style={{ fontSize: 13, color: "#6B7280" }}>Drop suggestions below — anyone can upvote or downvote to help the hosts decide what makes the cut.</div>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0,1fr))", gap: 12 }}>
-        {IDEA_CATS.map(({ key, label, icon }) => {
-          const catIdeas = (ideas[key] || []).slice().sort((a, b) => b.score - a.score);
-          return (
-            <div key={key} style={{ background: "#fff", borderRadius: 14, border: "0.5px solid rgba(0,0,0,0.1)", padding: "16px 18px", boxShadow: "0 1px 8px rgba(74,124,89,0.05)" }}>
-              <div style={{ fontSize: 14, fontWeight: 500, color: "#2C3E35", marginBottom: 12, display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontSize: 17 }}>{icon}</span> {label}
-              </div>
-
-              {catIdeas.length === 0 && (
-                <div style={{ fontSize: 12, color: "#9CA3AF", padding: "6px 0 10px", ...mono }}>No suggestions yet — be the first!</div>
-              )}
-
-              {catIdeas.map(idea => (
-                <div key={idea.id} style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "9px 0", borderTop: "0.5px solid rgba(0,0,0,0.07)" }}>
-                  <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2, flexShrink: 0, paddingTop: 2 }}>
-                    <button
-                      onClick={() => vote(key, idea.id, "up")}
-                      style={{
-                        width: 24, height: 20, border: "0.5px solid", cursor: "pointer",
-                        borderRadius: 4, fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center",
-                        borderColor: idea.voted === "up" ? "#7A9E7E" : "rgba(0,0,0,0.12)",
-                        background: idea.voted === "up" ? "#D1FAE5" : "rgba(0,0,0,0.02)",
-                        color: idea.voted === "up" ? "#4A7C59" : "#9CA3AF",
-                        transition: "all 0.1s",
-                      }}
-                    >▲</button>
-                    <div style={{
-                      fontSize: 12, fontWeight: 500, ...mono, minWidth: 20, textAlign: "center",
-                      color: idea.score > 0 ? "#4A7C59" : idea.score < 0 ? "#B91C1C" : "#6B7280",
-                    }}>{idea.score}</div>
-                    <button
-                      onClick={() => vote(key, idea.id, "down")}
-                      style={{
-                        width: 24, height: 20, border: "0.5px solid", cursor: "pointer",
-                        borderRadius: 4, fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center",
-                        borderColor: idea.voted === "down" ? "#F87171" : "rgba(0,0,0,0.12)",
-                        background: idea.voted === "down" ? "#FEE2E2" : "rgba(0,0,0,0.02)",
-                        color: idea.voted === "down" ? "#B91C1C" : "#9CA3AF",
-                        transition: "all 0.1s",
-                      }}
-                    >▼</button>
-                  </div>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, color: "#1F2937", lineHeight: 1.4 }}>{idea.text}</div>
-                    <div style={{ fontSize: 11, color: "#9CA3AF", marginTop: 3 }}>— {idea.author}</div>
-                  </div>
-                </div>
-              ))}
-
-              <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
-                <input
-                  value={inputs[key] || ""}
-                  onChange={e => setInputs(p => ({ ...p, [key]: e.target.value }))}
-                  onKeyDown={e => e.key === "Enter" && addIdea(key)}
-                  placeholder="Add a suggestion..."
-                  style={{ flex: 1, fontSize: 12, padding: "6px 10px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", background: "rgba(0,0,0,0.02)", color: "#1F2937", outline: "none" }}
-                />
-                <input
-                  value={authors[key] || ""}
-                  onChange={e => setAuthors(p => ({ ...p, [key]: e.target.value }))}
-                  placeholder="Your name"
-                  style={{ width: 88, fontSize: 12, padding: "6px 10px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", background: "rgba(0,0,0,0.02)", color: "#1F2937", outline: "none" }}
-                />
-                <button
-                  onClick={() => addIdea(key)}
-                  style={{ padding: "6px 12px", borderRadius: 8, border: "0.5px solid rgba(0,0,0,0.15)", background: "#2C3E35", color: "#FDFAF4", fontSize: 12, cursor: "pointer", whiteSpace: "nowrap" }}
-                >+ Add</button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
+.idea-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 10px 0;
+    border-top: 0.5px solid rgba(0,0,0,0.07);
 }
 
-// ─── MAIN APP ─────────────────────────────────────────────────────────────────
-export default function Dashboard() {
-  const [tasks, setTasks]         = useState([]);
-  const [syncStatus, setSyncStatus] = useState("loading"); // loading | live | error
-  const [view, setView]           = useState("overview");
-  const [catFilter, setCatFilter] = useState(null);
-  const [ideas, setIdeas]         = useState(SEED_IDEAS);
-  const [nextId, setNextId]       = useState(10);
+.vote-score-pos { color: #4A7C59; font-weight: 600; font-family: 'DM Mono', monospace; }
+.vote-score-neg { color: #B91C1C; font-weight: 600; font-family: 'DM Mono', monospace; }
+.vote-score-neu { color: #9CA3AF; font-family: 'DM Mono', monospace; }
 
-  useEffect(() => {
-    fetch(csvUrl("Master Tracker"))
-      .then(r => { if (!r.ok) throw new Error(); return r.text(); })
-      .then(text => {
-        const parsed = sheetToTasks(text);
-        if (parsed.length > 0) { setTasks(parsed); setSyncStatus("live"); }
-        else throw new Error("empty");
-      })
-      .catch(() => { setFallback(); setSyncStatus("error"); });
-  }, []);
+div[data-testid="stHorizontalBlock"] { gap: 0.5rem; }
 
-  function setFallback() {
-    setTasks([
-      { id:0,  cat:"Venue & Logistics", item:"Confirm venue", desc:"Apartment vs Box Cafe, Dream Vista", status:"Completed", owner:"Jessica", priority:"High", link:"Box Cafe JC", sw:"" },
-      { id:1,  cat:"Venue & Logistics", item:"Secure booking / reservation", desc:"Lock in date and deposits", status:"Completed", owner:"Jessica", priority:"High", link:"", sw:"Jessica" },
-      { id:2,  cat:"Venue & Logistics", item:"Confirm guest capacity", desc:"Headcount check against venue max", status:"In Progress", owner:"Savitri", priority:"High", link:"", sw:"" },
-      { id:3,  cat:"Venue & Logistics", item:"Splitwise tracking setup", desc:"Create group, add all hosts", status:"Completed", owner:"Carly", priority:"Medium", link:"", sw:"" },
-      { id:4,  cat:"Invitations & Guest Experience", item:"Boarding pass invite design", desc:"Digital boarding pass invite", status:"Completed", owner:"Savitri", priority:"High", link:"", sw:"" },
-      { id:5,  cat:"Invitations & Guest Experience", item:"QR code RSVP setup", desc:"QR code linking to RSVP form", status:"Completed", owner:"Savitri", priority:"High", link:"", sw:"" },
-      { id:6,  cat:"Invitations & Guest Experience", item:"Evite creation", desc:"Backup digital send", status:"Completed", owner:"Savitri", priority:"Medium", link:"", sw:"" },
-      { id:7,  cat:"Invitations & Guest Experience", item:"Print keepsake invites", desc:"Physical boarding pass invites", status:"Not Yet Started", owner:"Savitri", priority:"Medium", link:"", sw:"Savitri" },
-      { id:8,  cat:"Invitations & Guest Experience", item:"Send invites", desc:"Target: early April", status:"Not Yet Started", owner:"Savitri", priority:"High", link:"", sw:"Savitri" },
-      { id:9,  cat:"Keepsakes & Sentimental Touches", item:"Bookstand for Book Tree", desc:"Wooden or acrylic stand", status:"In Progress", owner:"Savitri", priority:"", link:"Book Tree", sw:"" },
-      { id:10, cat:"Food", item:"Define food concept", desc:"Mini bites vs full catering", status:"In Progress", owner:"Jessica", priority:"High", link:"", sw:"" },
-      { id:11, cat:"Food", item:"Incorporate pregnancy cravings", desc:"Cantaloupe, uncrustables, queso", status:"In Progress", owner:"Jessica", priority:"High", link:"", sw:"" },
-      { id:12, cat:"Food", item:"Catering vs self-serve plan", desc:"Assign roles or get quotes", status:"In Progress", owner:"Jessica", priority:"High", link:"", sw:"" },
-      { id:13, cat:"Food", item:"Finalize menu", desc:"Full menu locked", status:"Not Yet Started", owner:"Jessica", priority:"High", link:"", sw:"" },
-      { id:14, cat:"Food", item:"Serving setup", desc:"Platters, labels, serving utensils", status:"Not Yet Started", owner:"Savitri", priority:"Low", link:"", sw:"" },
-      { id:15, cat:"Drinks", item:"Define two signature drinks", desc:"Nicole + Zach inspired", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-      { id:16, cat:"Drinks", item:"Cocktail bar format", desc:"Hugo / Aperol / mimosa bar", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-      { id:17, cat:"Drinks", item:"Ice cube detail", desc:"Airplane or balloon silicone molds", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-      { id:18, cat:"Decor & Styling", item:"Balloon box decision", desc:"Giant balloon box", status:"Not Yet Started", owner:"", priority:"High", link:"", sw:"Savitri" },
-      { id:19, cat:"Decor & Styling", item:"Balloon bouquets (2 large)", desc:"Three large helium bouquets — sage, cream, silver", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"Savitri" },
-      { id:20, cat:"Decor & Styling", item:"Table styling direction", desc:"Elevated — no kitschy baby stuff", status:"Not Yet Started", owner:"", priority:"High", link:"", sw:"" },
-      { id:21, cat:"Decor & Styling", item:"Paper plane drink markers", desc:"Paper plane drink stirrers", status:"Not Yet Started", owner:"", priority:"Low", link:"", sw:"" },
-      { id:22, cat:"Decor & Styling", item:"Table cloths & confetti", desc:"Table confetti & cloths", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-      { id:23, cat:"Decor & Styling", item:"Baby photo display", desc:"Baby photos of Gena & Brian", status:"Not Yet Started", owner:"", priority:"High", link:"", sw:"" },
-      { id:24, cat:"Decor & Styling", item:"Overall palette consistency check", desc:"Final review", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-      { id:25, cat:"Activities & Games", item:"Travel trivia — couple's story", desc:"10 Qs about Nicole + Zach", status:"Not Yet Started", owner:"", priority:"High", link:"", sw:"" },
-      { id:26, cat:"Activities & Games", item:"Guess baby traits", desc:"Eye color, hair, first word", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-      { id:27, cat:"Activities & Games", item:"Guess baby's first trip", desc:"Guests write destination", status:"Not Yet Started", owner:"", priority:"Low", link:"", sw:"" },
-      { id:28, cat:"Keepsakes & Sentimental Touches", item:"Letters to Nicole (before baby)", desc:"Advice / memories to Nicole", status:"Not Yet Started", owner:"", priority:"High", link:"", sw:"" },
-      { id:29, cat:"Keepsakes & Sentimental Touches", item:"Postpartum letters from women", desc:"Sealed for postpartum", status:"Not Yet Started", owner:"", priority:"High", link:"", sw:"" },
-      { id:30, cat:"Favors & Gifts", item:"Travel-themed gift bags", desc:"Travel kit, personalized tag", status:"Not Yet Started", owner:"", priority:"Medium", link:"", sw:"" },
-    ]);
-  }
+/* Make tab styling cleaner */
+.stTabs [data-baseweb="tab-list"] {
+    background: rgba(255,255,255,0.5);
+    border-radius: 10px;
+    padding: 3px;
+    border: 0.5px solid rgba(0,0,0,0.08);
+    gap: 3px;
+}
+.stTabs [data-baseweb="tab"] {
+    border-radius: 8px;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-size: 14px;
+}
+.stTabs [aria-selected="true"] {
+    background: #2C3E35 !important;
+    color: #FDFAF4 !important;
+}
 
-  const nav = (v) => {
-    setView(v);
-    if (v !== "tasks") setCatFilter(null);
-  };
+/* Table styling */
+.dataframe { font-family: 'DM Mono', monospace; font-size: 12px; }
 
-  // ── Derived ────────────────────────────────────────────────────────────────
-  const done   = tasks.filter(t => t.status === "Completed").length;
-  const inProg = tasks.filter(t => t.status === "In Progress").length;
-  const highOpen = tasks.filter(t => t.status !== "Completed" && t.priority === "High");
-  const statusCounts = tasks.reduce((a, t) => { a[t.status] = (a[t.status] || 0) + 1; return a; }, {});
-  const STATUS_ORDER = ["Completed", "In Progress", "Not Yet Started", "Considering"];
+/* Hide streamlit branding */
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+header { visibility: hidden; }
 
-  const CATS = Object.keys(CAT_ICONS);
-  const byCat = CATS.map(cat => ({
-    cat, icon: CAT_ICONS[cat] || "📌",
-    done:  tasks.filter(t => t.cat === cat && t.status === "Completed").length,
-    total: tasks.filter(t => t.cat === cat).length,
-    highOpen: tasks.filter(t => t.cat === cat && t.status !== "Completed" && t.priority === "High").length,
-  })).filter(c => c.total > 0);
+/* Progress bar */
+.prog-bar-bg {
+    height: 4px;
+    background: rgba(0,0,0,0.07);
+    border-radius: 2px;
+    margin-top: 10px;
+    overflow: hidden;
+}
+.prog-bar-fill {
+    height: 100%;
+    border-radius: 2px;
+    background: #7A9E7E;
+}
 
-  // ── Styles ─────────────────────────────────────────────────────────────────
-  const card = { background: "#fff", borderRadius: 14, padding: "18px 20px", border: "0.5px solid rgba(0,0,0,0.1)", boxShadow: "0 1px 8px rgba(74,124,89,0.05)" };
+.pill {
+    display: inline-block;
+    padding: 2px 9px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
 
-  return (
-    <div style={{ minHeight: "100vh", background: "linear-gradient(145deg,#FDFAF4 0%,#F7F2EA 40%,#EAF2EA 100%)", fontFamily: "'Cormorant Garamond', Georgia, serif", color: "#1F2937" }}>
-      {/* HEADER */}
-      <div style={{ background: "#2C3E35", padding: "20px 32px", display: "flex", alignItems: "center", justifyContent: "space-between", position: "relative", overflow: "hidden" }}>
-        <div style={{ position: "absolute", inset: 0, opacity: 0.04, backgroundImage: "radial-gradient(circle,#fff 1px,transparent 1px)", backgroundSize: "24px 24px" }} />
-        <div style={{ display: "flex", alignItems: "center", gap: 12, position: "relative" }}>
-          <div style={{ width: 40, height: 40, borderRadius: 10, background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.12)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <PlaneIcon />
-          </div>
-          <div>
-            <div style={{ fontSize: 20, fontWeight: 500, color: "#FDFAF4", letterSpacing: "0.01em" }}>Baby's First Flight</div>
-            <div style={{ ...mono, fontSize: 10, color: "#B8C4CC", marginTop: 2, letterSpacing: "0.07em" }}>JESSICA · CARLY · KIRSTEN · SAVITRI</div>
-          </div>
-        </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "center", position: "relative" }}>
-          <div style={{
-            ...mono, fontSize: 11, padding: "5px 12px", borderRadius: 14,
-            background: syncStatus === "live" ? "rgba(122,158,126,0.2)" : "rgba(255,255,255,0.06)",
-            border: `1px solid ${syncStatus === "live" ? "rgba(122,158,126,0.35)" : "rgba(255,255,255,0.12)"}`,
-            color: syncStatus === "live" ? "#C8DCC8" : "#9CA3AF",
-          }}>
-            {syncStatus === "loading" ? "Syncing sheet..." : syncStatus === "live" ? "✓ Live from Sheet" : "⚠ Make sheet public to sync"}
-          </div>
-          <a href={SPLITWISE_URL} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", gap: 5, background: "rgba(122,158,126,0.2)", border: "1px solid rgba(122,158,126,0.35)", borderRadius: 20, padding: "6px 14px", color: "#C8DCC8", textDecoration: "none", fontSize: 12, ...mono }}>
-            💸 Splitwise
-          </a>
-        </div>
-      </div>
+.splitwise-link {
+    background: rgba(122,158,126,0.2);
+    border: 1px solid rgba(122,158,126,0.35);
+    border-radius: 20px;
+    padding: 6px 16px;
+    color: #C8DCC8;
+    text-decoration: none;
+    font-size: 12px;
+    font-family: 'DM Mono', monospace;
+}
 
-      {/* NAV */}
-      <div style={{ padding: "18px 32px 0" }}>
-        <div style={{ display: "flex", gap: 3, background: "rgba(255,255,255,0.5)", borderRadius: 10, padding: 3, width: "fit-content", border: "0.5px solid rgba(0,0,0,0.08)" }}>
-          {["overview", "tasks", "ideas board"].map(v => (
-            <button key={v} onClick={() => nav(v === "ideas board" ? "ideas" : v)} style={{
-              padding: "7px 18px", borderRadius: 8, border: "none", cursor: "pointer",
-              fontSize: 13, fontWeight: view === (v === "ideas board" ? "ideas" : v) ? 500 : 400,
-              background: view === (v === "ideas board" ? "ideas" : v) ? "#2C3E35" : "transparent",
-              color: view === (v === "ideas board" ? "ideas" : v) ? "#FDFAF4" : "#6B7280",
-              fontFamily: "'Cormorant Garamond', Georgia, serif",
-              transition: "all 0.15s",
-            }}>{v.charAt(0).toUpperCase() + v.slice(1)}</button>
-          ))}
-        </div>
-      </div>
+stProgress > div > div { background: #7A9E7E !important; }
+</style>
+""", unsafe_allow_html=True)
 
-      <div style={{ padding: "20px 32px 40px" }}>
-        {/* ══ OVERVIEW ══ */}
-        {view === "overview" && (
-          <>
-            {/* KPIs */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 12, marginBottom: 14 }}>
-              <div style={card}>
-                <div style={{ ...mono, fontSize: 11, color: "#9CA3AF", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 8 }}>Tasks done</div>
-                <div style={{ fontSize: 48, fontWeight: 300, lineHeight: 1, color: "#4A7C59" }}>{done}</div>
-                <div style={{ fontSize: 13, color: "#6B7280", marginTop: 5 }}>of {tasks.length} total items</div>
-                <div style={{ height: 4, background: "rgba(0,0,0,0.07)", borderRadius: 2, marginTop: 10, overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${tasks.length ? Math.round(done / tasks.length * 100) : 0}%`, background: "#7A9E7E", borderRadius: 2, transition: "width 0.5s" }} />
-                </div>
-              </div>
 
-              <div style={{ ...card, cursor: "pointer", transition: "transform 0.1s" }}
-                onClick={() => nav("tasks")}
-                onMouseEnter={e => e.currentTarget.style.transform = "translateY(-2px)"}
-                onMouseLeave={e => e.currentTarget.style.transform = ""}>
-                <div style={{ ...mono, fontSize: 11, color: "#9CA3AF", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 8 }}>In progress</div>
-                <div style={{ fontSize: 48, fontWeight: 300, lineHeight: 1, color: "#1E40AF" }}>{inProg}</div>
-                <div style={{ fontSize: 13, color: "#6B7280", marginTop: 5 }}>items actively in motion</div>
-                <div style={{ ...mono, fontSize: 11, color: "#7A9E7E", marginTop: 10 }}>view all tasks →</div>
-              </div>
+# DATA LOADING
+@st.cache_data(ttl=60)
+def load_sheet():
+    url = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Master%20Tracker"
+    try:
+        r = requests.get(url, timeout=8)
+        r.raise_for_status()
+        df = pd.read_csv(io.StringIO(r.text))
+        # Find actual header row — look for "Category" column
+        if "Category" not in df.columns:
+            # Try skipping rows to find real header
+            for skip in range(1, 5):
+                df2 = pd.read_csv(io.StringIO(r.text), skiprows=skip)
+                if "Category" in df2.columns:
+                    df = df2
+                    break
+        df = df.dropna(subset=["Category"])
+        df = df[df["Category"].str.strip() != "Category"]
+        df = df[df["Category"].str.strip() != ""]
+        # Normalize column names
+        df.columns = [c.strip() for c in df.columns]
+        # Rename to standard names
+        rename = {}
+        for col in df.columns:
+            cl = col.lower()
+            if "item name" in cl:       rename[col] = "Item"
+            elif "description" in cl:   rename[col] = "Notes"
+            elif "splitwise" in cl:     rename[col] = "Splitwise"
+            elif "link" in cl and "splitwise" not in cl: rename[col] = "Link"
+        df = df.rename(columns=rename)
+        # Fill NaN
+        for col in ["Status", "Owner", "Priority", "Notes", "Splitwise", "Link"]:
+            if col in df.columns:
+                df[col] = df[col].fillna("").astype(str).str.strip()
+        df["Status"] = df["Status"].replace("", "Not Yet Started")
+        return df, True
+    except Exception as e:
+        return None, False
 
-              <div style={{ ...card, background: highOpen.length > 0 ? "#FFFBEB" : "#fff", border: `0.5px solid ${highOpen.length > 0 ? "#F0D890" : "rgba(0,0,0,0.1)"}` }}>
-                <div style={{ ...mono, fontSize: 11, color: highOpen.length > 0 ? "#B5860A" : "#9CA3AF", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 8 }}>High priority open</div>
-                <div style={{ fontSize: 48, fontWeight: 300, lineHeight: 1, color: highOpen.length > 0 ? "#B5860A" : "#1F2937" }}>{highOpen.length}</div>
-                <div style={{ fontSize: 13, color: "#9A7200", marginTop: 5 }}>need attention before event</div>
-                {highOpen.length > 0 && (
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 10 }}>
-                    {highOpen.slice(0, 3).map(t => (
-                      <span key={t.id} style={{ fontSize: 10, background: "rgba(255,255,255,0.7)", padding: "2px 8px", borderRadius: 8, color: "#8a6500", border: "0.5px solid #F0D890" }}>
-                        {t.item.length > 22 ? t.item.slice(0, 22) + "…" : t.item}
-                      </span>
-                    ))}
-                    {highOpen.length > 3 && <span style={{ fontSize: 10, color: "#9CA3AF" }}>+{highOpen.length - 3} more</span>}
-                  </div>
-                )}
-              </div>
-            </div>
 
-            {/* Status bar */}
-            <div style={{ ...card, marginBottom: 14 }}>
-              <div style={{ ...mono, fontSize: 11, color: "#9CA3AF", letterSpacing: "0.07em", textTransform: "uppercase", marginBottom: 12 }}>Status overview</div>
-              <div style={{ display: "flex", borderRadius: 4, overflow: "hidden", height: 8 }}>
-                {STATUS_ORDER.map(s => {
-                  const c = statusCounts[s] || 0;
-                  const pct = tasks.length ? (c / tasks.length) * 100 : 0;
-                  return pct > 0 ? <div key={s} title={`${s}: ${c}`} style={{ flex: pct, background: STATUS_BAR_COLORS[s], borderLeft: "1px solid rgba(255,255,255,0.4)" }} /> : null;
-                })}
-              </div>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 16, marginTop: 12 }}>
-                {STATUS_ORDER.map(s => (
-                  <div key={s} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-                    <div style={{ width: 10, height: 10, borderRadius: 2, background: STATUS_BAR_COLORS[s] }} />
-                    <span style={{ ...mono, fontSize: 12, color: "#6B7280" }}>{s} <strong style={{ color: "#1F2937" }}>{statusCounts[s] || 0}</strong></span>
-                  </div>
-                ))}
-              </div>
-            </div>
+def get_fallback():
+    rows = [
+        ("Venue & Logistics","Confirm venue","Apartment vs Box Cafe, Dream Vista","Completed","Jessica","High","Box Cafe JC",""),
+        ("Venue & Logistics","Secure booking / reservation","Lock in date and deposits","Completed","Jessica","High","","Jessica"),
+        ("Venue & Logistics","Confirm guest capacity","Headcount check against venue max","In Progress","Savitri","High","",""),
+        ("Venue & Logistics","Splitwise tracking setup","Create group, add all hosts","Completed","Carly","Medium","",""),
+        ("Invitations & Guest Experience","Boarding pass invite design","Digital boarding pass","Completed","Savitri","High","",""),
+        ("Invitations & Guest Experience","QR code RSVP setup","QR code to RSVP form","Completed","Savitri","High","",""),
+        ("Invitations & Guest Experience","Evite creation","Backup digital send","Completed","Savitri","Medium","",""),
+        ("Invitations & Guest Experience","Print keepsake invites","Physical boarding pass invites","Not Yet Started","Savitri","Medium","","Savitri"),
+        ("Invitations & Guest Experience","Send invites","Target: early April","Not Yet Started","Savitri","High","","Savitri"),
+        ("Keepsakes & Sentimental Touches","Bookstand for Book Tree","Wooden or acrylic stand","In Progress","Savitri","","Book Tree",""),
+        ("Food","Define food concept","Mini bites vs full catering","In Progress","Jessica","High","",""),
+        ("Food","Incorporate pregnancy cravings","Cantaloupe, uncrustables, queso","In Progress","Jessica","High","",""),
+        ("Food","Catering vs self-serve plan","Assign roles or get quotes","In Progress","Jessica","High","",""),
+        ("Food","Finalize menu","Full menu locked","Not Yet Started","Jessica","High","",""),
+        ("Food","Serving setup","Platters, labels, serving utensils","Not Yet Started","Savitri","Low","",""),
+        ("Drinks","Define two signature drinks","Nicole + Zach inspired","Not Yet Started","","Medium","",""),
+        ("Drinks","Cocktail bar format","Hugo / Aperol / mimosa bar","Not Yet Started","","Medium","",""),
+        ("Drinks","Ice cube detail","Airplane or balloon silicone molds","Not Yet Started","","Medium","",""),
+        ("Decor & Styling","Balloon box decision","Giant balloon box","Not Yet Started","","High","","Savitri"),
+        ("Decor & Styling","Balloon bouquets (2 large)","Three large helium bouquets","Not Yet Started","","Medium","","Savitri"),
+        ("Decor & Styling","Table styling direction","Elevated — no kitschy baby stuff","Not Yet Started","","High","",""),
+        ("Decor & Styling","Paper plane drink markers","Paper plane drink stirrers","Not Yet Started","","Low","",""),
+        ("Decor & Styling","Table cloths & confetti","Table confetti & cloths","Not Yet Started","","Medium","",""),
+        ("Decor & Styling","Baby photo display","Baby photos of Gena & Brian","Not Yet Started","","High","",""),
+        ("Decor & Styling","Overall palette consistency check","Final review","Not Yet Started","","Medium","",""),
+        ("Activities & Games","Travel trivia — couple's story","10 Qs about Nicole + Zach","Not Yet Started","","High","",""),
+        ("Activities & Games","Guess baby traits","Eye color, hair, first word","Not Yet Started","","Medium","",""),
+        ("Activities & Games","Guess baby's first trip","Guests write destination","Not Yet Started","","Low","",""),
+        ("Keepsakes & Sentimental Touches","Letters to Nicole (before baby)","Advice / memories to Nicole","Not Yet Started","","High","",""),
+        ("Keepsakes & Sentimental Touches","Postpartum letters from women","Sealed for postpartum","Not Yet Started","","High","",""),
+        ("Favors & Gifts","Travel-themed gift bags","Travel kit, personalized tag","Not Yet Started","","Medium","",""),
+    ]
+    df = pd.DataFrame(rows, columns=["Category","Item","Notes","Status","Owner","Priority","Link","Splitwise"])
+    return df
 
-            {/* Categories */}
-            <div style={{ fontSize: 15, fontWeight: 500, color: "#2C3E35", marginBottom: 12 }}>Categories</div>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8 }}>
-              {byCat.map(({ cat, icon, done, total, highOpen }) => (
-                <button key={cat}
-                  onClick={() => { setCatFilter(cat); setView("tasks"); }}
-                  style={{
-                    ...card, display: "flex", alignItems: "center", gap: 12, cursor: "pointer",
-                    textAlign: "left", width: "100%",
-                    background: highOpen > 0 ? "rgba(255,248,225,0.7)" : "#fff",
-                    border: `0.5px solid ${highOpen > 0 ? "#F0D890" : "rgba(0,0,0,0.1)"}`,
-                    transition: "transform 0.1s",
-                  }}
-                  onMouseEnter={e => e.currentTarget.style.transform = "translateY(-2px)"}
-                  onMouseLeave={e => e.currentTarget.style.transform = ""}
-                >
-                  <span style={{ fontSize: 20, flexShrink: 0 }}>{icon}</span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontSize: 12, fontWeight: 500, color: "#2C3E35", lineHeight: 1.3 }}>{cat}</div>
-                    {highOpen > 0 && <div style={{ ...mono, fontSize: 10, color: "#B5860A", marginTop: 2 }}>{highOpen} high priority open</div>}
-                    <div style={{ height: 3, background: "rgba(0,0,0,0.07)", borderRadius: 2, marginTop: 6 }}>
-                      <div style={{ height: 3, borderRadius: 2, width: total > 0 ? `${Math.round(done / total * 100)}%` : "0", background: "#7A9E7E", transition: "width 0.5s" }} />
+
+# SESSION STATE for ideas and votes
+if "ideas" not in st.session_state:
+    st.session_state.ideas = {k: list(v) for k, v in SEED_IDEAS.items()}
+if "next_id" not in st.session_state:
+    st.session_state.next_id = 100
+if "voted" not in st.session_state:
+    st.session_state.voted = {}  # idea_key -> "up"|"down"|None
+
+
+# HEADER
+st.markdown(f"""
+<div class="header-bar">
+  <div>
+    <div class="header-title">✈️ &nbsp; Baby's First Flight</div>
+    <div class="header-sub">JESSICA &nbsp;·&nbsp; CARLY &nbsp;·&nbsp; KIRSTEN &nbsp;·&nbsp; SAVITRI</div>
+  </div>
+  <div class="header-links">
+    <a href="{SPLITWISE_URL}" target="_blank" class="splitwise-link">💸 &nbsp; Splitwise</a>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+
+# LOAD DATA
+df, live = load_sheet()
+if df is None:
+    df = get_fallback()
+    st.warning("⚠️ Sheet not publicly accessible — showing last known data. Go to **File → Share → Anyone with link → Viewer** in your Google Sheet to enable live sync.", icon="⚠️")
+else:
+    st.caption(f"✓ Live from Google Sheet · refreshes every 60s · {len(df)} items loaded")
+
+
+# HELPER: colored badge HTML
+def status_badge(s):
+    bg = STATUS_COLORS.get(s, "#F3F4F6")
+    fg = STATUS_TEXT.get(s, "#374151")
+    return f'<span class="status-badge" style="background:{bg};color:{fg}">{s}</span>'
+
+def priority_pill(p):
+    if not p:
+        return ""
+    bg, fg = PRIORITY_COLORS.get(p, ("#F3F4F6", "#374151"))
+    return f'<span class="pill" style="background:{bg};color:{fg}">{p}</span>'
+
+def owner_pill(o):
+    if not o:
+        return '<span style="color:#9CA3AF;font-size:12px">—</span>'
+    bg, fg = OWNER_COLORS.get(o, ("#F3F4F6", "#555"))
+    return f'<span class="pill" style="background:{bg};color:{fg}">{o}</span>'
+
+def check_icon(status):
+    if status == "Completed":
+        return "✅"
+    elif status == "In Progress":
+        return "🔵"
+    return "⬜"
+
+
+# TABS
+tab1, tab2, tab3 = st.tabs(["📋 Overview", "✅ Tasks", "💡 Ideas board"])
+
+
+# ═══ TAB 1: OVERVIEW ═══
+with tab1:
+    total     = len(df)
+    done      = len(df[df["Status"] == "Completed"])
+    in_prog   = len(df[df["Status"] == "In Progress"])
+    high_open = df[(df["Status"] != "Completed") & (df["Priority"] == "High")]
+
+    # KPIs
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        pct = int(done / total * 100) if total else 0
+        st.markdown(f"""
+        <div class="kpi-card">
+          <div class="kpi-label">Tasks done</div>
+          <div class="kpi-value">{done}</div>
+          <div class="kpi-sub">of {total} total items</div>
+          <div class="prog-bar-bg"><div class="prog-bar-fill" style="width:{pct}%"></div></div>
+        </div>""", unsafe_allow_html=True)
+
+    with c2:
+        st.markdown(f"""
+        <div class="kpi-card">
+          <div class="kpi-label">In progress</div>
+          <div class="kpi-value-blue">{in_prog}</div>
+          <div class="kpi-sub">items actively in motion</div>
+        </div>""", unsafe_allow_html=True)
+
+    with c3:
+        warn_bg = "#FFFBEB" if len(high_open) > 0 else "white"
+        warn_border = "#F0D890" if len(high_open) > 0 else "rgba(0,0,0,0.1)"
+        tags_html = ""
+        for _, row in high_open.head(3).iterrows():
+            label = row["Item"][:22] + "…" if len(row["Item"]) > 22 else row["Item"]
+            tags_html += f'<span style="font-size:10px;background:rgba(255,255,255,0.7);padding:2px 8px;border-radius:8px;color:#8a6500;border:0.5px solid #F0D890;margin-right:4px">{label}</span>'
+        st.markdown(f"""
+        <div class="kpi-card" style="background:{warn_bg};border-color:{warn_border}">
+          <div class="kpi-label" style="color:{'#B5860A' if len(high_open)>0 else '#9CA3AF'}">High priority open</div>
+          <div class="kpi-value-amber">{len(high_open)}</div>
+          <div class="kpi-sub" style="color:#9A7200">need attention before event</div>
+          <div style="margin-top:10px">{tags_html}</div>
+        </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Status bar
+    status_order = ["Completed", "In Progress", "Not Yet Started", "Considering"]
+    bar_colors   = {"Completed": "#7A9E7E", "In Progress": "#60A5FA", "Not Yet Started": "#D1D5DB", "Considering": "#FBBF24"}
+    counts = df["Status"].value_counts().to_dict()
+
+    bar_html = '<div style="display:flex;border-radius:4px;overflow:hidden;height:10px;margin:12px 0">'
+    for s in status_order:
+        n = counts.get(s, 0)
+        if n > 0:
+            pct = n / total * 100
+            bar_html += f'<div title="{s}: {n}" style="flex:{pct};background:{bar_colors[s]};border-left:1px solid rgba(255,255,255,0.4)"></div>'
+    bar_html += "</div>"
+
+    legend_html = '<div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:8px">'
+    for s in status_order:
+        n = counts.get(s, 0)
+        legend_html += f'<div style="display:flex;align-items:center;gap:5px"><div style="width:10px;height:10px;border-radius:2px;background:{bar_colors[s]}"></div><span style="font-size:12px;color:#6B7280;font-family:\'DM Mono\',monospace">{s} <strong style="color:#1F2937">{n}</strong></span></div>'
+    legend_html += "</div>"
+
+    st.markdown(f"""
+    <div class="kpi-card" style="margin-bottom:16px">
+      <div class="kpi-label">Status overview</div>
+      {bar_html}{legend_html}
+    </div>""", unsafe_allow_html=True)
+
+    # Category cards — 3 per row
+    st.markdown('<div class="section-title">Categories</div>', unsafe_allow_html=True)
+    cats = [c for c in CAT_ICONS.keys() if c in df["Category"].values]
+    rows_of_cats = [cats[i:i+3] for i in range(0, len(cats), 3)]
+
+    for row in rows_of_cats:
+        cols = st.columns(3)
+        for ci, cat in enumerate(row):
+            cat_df = df[df["Category"] == cat]
+            cat_done  = len(cat_df[cat_df["Status"] == "Completed"])
+            cat_total = len(cat_df)
+            cat_high  = len(cat_df[(cat_df["Status"] != "Completed") & (cat_df["Priority"] == "High")])
+            icon      = CAT_ICONS.get(cat, "📌")
+            pct_cat   = int(cat_done / cat_total * 100) if cat_total else 0
+            warn_card = cat_high > 0
+            warn_note = f'<div style="font-size:10px;color:#B5860A;font-family:\'DM Mono\',monospace;margin-top:2px">{cat_high} high priority open</div>' if warn_card else ""
+
+            with cols[ci]:
+                st.markdown(f"""
+                <div class="cat-card {'cat-card-warn' if warn_card else ''}">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <span style="font-size:22px">{icon}</span>
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:12px;font-weight:500;color:#2C3E35">{cat}</div>
+                      {warn_note}
+                      <div style="height:3px;background:rgba(0,0,0,0.07);border-radius:2px;margin-top:6px">
+                        <div style="height:3px;border-radius:2px;width:{pct_cat}%;background:#7A9E7E"></div>
+                      </div>
+                    </div>
+                    <div style="text-align:right;flex-shrink:0">
+                      <div style="font-size:18px;font-weight:500;color:#4A7C59">{cat_done}</div>
+                      <div style="font-size:11px;color:#9CA3AF;font-family:'DM Mono',monospace">/{cat_total}</div>
                     </div>
                   </div>
-                  <div style={{ textAlign: "right", flexShrink: 0 }}>
-                    <div style={{ fontSize: 18, fontWeight: 500, color: "#4A7C59" }}>{done}</div>
-                    <div style={{ ...mono, fontSize: 11, color: "#9CA3AF" }}>/{total}</div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+                </div>""", unsafe_allow_html=True)
 
-        {/* ══ TASKS ══ */}
-        {view === "tasks" && (
-          <>
-            {!catFilter && (
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
-                {byCat.map(({ cat, icon, total, highOpen }) => (
-                  <button key={cat} onClick={() => setCatFilter(cat)} style={{
-                    padding: "5px 12px", borderRadius: 16,
-                    border: `0.5px solid ${highOpen > 0 ? "#F0D890" : "rgba(0,0,0,0.1)"}`,
-                    cursor: "pointer", fontSize: 11, ...mono,
-                    background: highOpen > 0 ? "rgba(255,248,225,0.9)" : "rgba(255,255,255,0.7)",
-                    color: highOpen > 0 ? "#8a6500" : "#6B7280",
-                    transition: "all 0.12s",
-                  }}>
-                    {icon} {cat} ({total})
-                  </button>
-                ))}
-              </div>
-            )}
-            <TaskTable
-              tasks={catFilter ? tasks.filter(t => t.cat === catFilter) : tasks}
-              onBack={catFilter ? () => setCatFilter(null) : null}
-              title={catFilter || "All tasks"}
-              icon={catFilter ? CAT_ICONS[catFilter] : "✈️"}
-            />
-          </>
-        )}
 
-        {/* ══ IDEAS ══ */}
-        {view === "ideas" && (
-          <IdeasBoard ideas={ideas} setIdeas={setIdeas} nextId={nextId} setNextId={setNextId} />
-        )}
+# ═══ TAB 2: TASKS ═══
+with tab2:
+    col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
 
-        {/* Footer */}
-        <div style={{ marginTop: 36, paddingTop: 16, borderTop: "0.5px solid #C8DCC8", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#9CA3AF", fontSize: 12 }}>
-            <PlaneIcon size={13} color="#C8DCC8" />
-            <span style={{ ...mono, letterSpacing: "0.05em" }}>BABY'S FIRST FLIGHT · SOFT GREEN · CREAM · SILVER</span>
-          </div>
-          <a href={SPLITWISE_URL} target="_blank" rel="noopener noreferrer" style={{ ...mono, fontSize: 12, color: "#7A9E7E", textDecoration: "none" }}>
-            💸 Open Splitwise →
-          </a>
-        </div>
-      </div>
+    all_cats    = ["All"] + sorted(df["Category"].dropna().unique().tolist())
+    all_owners  = ["All"] + sorted([o for o in df["Owner"].dropna().unique().tolist() if o])
+    all_statuses = ["All", "Completed", "In Progress", "Not Yet Started", "Considering"]
 
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
-        * { box-sizing: border-box; }
-        body { margin: 0; }
-        button { font-family: inherit; }
-        input { font-family: inherit; }
-        a { cursor: pointer; }
-      `}</style>
-    </div>
-  );
-}
+    with col_f1:
+        cat_filter = st.selectbox("Category", all_cats, key="cat_f")
+    with col_f2:
+        owner_filter = st.selectbox("Owner", all_owners, key="owner_f")
+    with col_f3:
+        status_filter = st.selectbox("Status", all_statuses, key="status_f")
+
+    filtered = df.copy()
+    if cat_filter != "All":
+        filtered = filtered[filtered["Category"] == cat_filter]
+    if owner_filter != "All":
+        filtered = filtered[filtered["Owner"] == owner_filter]
+    if status_filter != "All":
+        filtered = filtered[filtered["Status"] == status_filter]
+
+    st.caption(f"{len(filtered)} items")
+
+    if len(filtered) == 0:
+        st.info("No items match the selected filters.")
+    else:
+        # Render as HTML table for full styling control
+        rows_html = ""
+        for _, row in filtered.iterrows():
+            status  = str(row.get("Status", ""))
+            owner   = str(row.get("Owner", ""))
+            prio    = str(row.get("Priority", ""))
+            item    = str(row.get("Item", ""))
+            notes   = str(row.get("Notes", ""))
+            sw      = str(row.get("Splitwise", ""))
+            link    = str(row.get("Link", ""))
+
+            check = check_icon(status)
+            item_html = f'<a href="{link}" target="_blank" style="color:#4A7C59;text-decoration:none">{item} ↗</a>' if link.startswith("http") else item
+            if link and not link.startswith("http"):
+                item_html += f'<div style="font-size:10px;color:#9CA3AF;font-family:\'DM Mono\',monospace;margin-top:2px">{link}</div>'
+
+            strikethrough = "text-decoration:line-through;opacity:0.5;" if status == "Completed" else ""
+            row_bg = "rgba(209,250,229,0.15)" if status == "Completed" else ("rgba(255,248,225,0.4)" if prio == "High" and status != "Completed" else "#fff")
+
+            rows_html += f"""
+            <tr style="background:{row_bg};border-top:0.5px solid rgba(0,0,0,0.07)">
+              <td style="padding:10px 12px;width:30px">{check}</td>
+              <td style="padding:10px 12px;font-weight:500;{strikethrough}max-width:200px">{item_html}</td>
+              <td style="padding:10px 12px;color:#6B7280;font-size:12px;max-width:220px">{notes or '—'}</td>
+              <td style="padding:10px 12px">{status_badge(status)}</td>
+              <td style="padding:10px 12px">{owner_pill(owner)}</td>
+              <td style="padding:10px 12px">{priority_pill(prio)}</td>
+              <td style="padding:10px 12px;font-size:11px;font-family:'DM Mono',monospace;color:{'#4A7C59' if sw else '#D1D5DB'}">{sw or '—'}</td>
+            </tr>"""
+
+        table_html = f"""
+        <div style="background:white;border-radius:14px;border:0.5px solid rgba(0,0,0,0.1);overflow:hidden;box-shadow:0 1px 8px rgba(74,124,89,0.05)">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;font-family:'Cormorant Garamond',Georgia,serif">
+          <thead style="background:rgba(0,0,0,0.02)">
+            <tr>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08);width:30px"></th>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08)">Item</th>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08)">Notes</th>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08)">Status</th>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08)">Owner</th>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08)">Priority</th>
+              <th style="padding:9px 12px;text-align:left;font-size:11px;font-family:'DM Mono',monospace;color:#9CA3AF;letter-spacing:0.05em;text-transform:uppercase;font-weight:400;border-bottom:0.5px solid rgba(0,0,0,0.08)">Splitwise owed to</th>
+            </tr>
+          </thead>
+          <tbody>{rows_html}</tbody>
+        </table>
+        </div>"""
+        st.markdown(table_html, unsafe_allow_html=True)
+
+
+# ═══ TAB 3: IDEAS ═══
+with tab3:
+    st.markdown("""
+    <div style="margin-bottom:16px">
+      <div class="section-title" style="margin-top:0">Ideas board</div>
+      <div style="font-size:13px;color:#6B7280">Drop suggestions — anyone can upvote or downvote to help the hosts decide what makes the cut.</div>
+    </div>""", unsafe_allow_html=True)
+
+    # 2 columns of idea categories
+    left_cats  = IDEA_CATS[:3]
+    right_cats = IDEA_CATS[3:]
+
+    for col_ideas, cat_group in zip(st.columns(2), [left_cats, right_cats]):
+        with col_ideas:
+            for cat_key, cat_icon, cat_label in cat_group:
+                st.markdown(f"""
+                <div style="background:white;border-radius:14px;padding:16px 18px;border:0.5px solid rgba(0,0,0,0.1);box-shadow:0 1px 8px rgba(74,124,89,0.05);margin-bottom:14px">
+                  <div style="font-size:14px;font-weight:500;color:#2C3E35;margin-bottom:10px">{cat_icon} &nbsp;{cat_label}</div>
+                """, unsafe_allow_html=True)
+
+                ideas_sorted = sorted(
+                    st.session_state.ideas.get(cat_key, []),
+                    key=lambda x: x["score"],
+                    reverse=True
+                )
+
+                if not ideas_sorted:
+                    st.markdown('<div style="font-size:12px;color:#9CA3AF;padding:6px 0 10px;font-family:\'DM Mono\',monospace">No suggestions yet — be the first!</div>', unsafe_allow_html=True)
+
+                for idea in ideas_sorted:
+                    idea_uid = f"{cat_key}_{idea['id']}"
+                    score = idea["score"]
+                    voted = st.session_state.voted.get(idea_uid)
+                    score_color = "#4A7C59" if score > 0 else ("#B91C1C" if score < 0 else "#9CA3AF")
+
+                    st.markdown(f"""
+                    <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:0.5px solid rgba(0,0,0,0.07)">
+                      <div style="flex:1">
+                        <div style="font-size:13px;color:#1F2937;line-height:1.4">{idea['text']}</div>
+                        <div style="font-size:11px;color:#9CA3AF;margin-top:3px">— {idea['author']}</div>
+                      </div>
+                      <div style="font-size:13px;font-weight:500;color:{score_color};font-family:'DM Mono',monospace;min-width:28px;text-align:center;padding-top:2px">{score:+d}</div>
+                    </div>""", unsafe_allow_html=True)
+
+                    v1, v2, v3 = st.columns([1, 1, 3])
+                    with v1:
+                        up_style = "🟢" if voted == "up" else "▲"
+                        if st.button(up_style, key=f"up_{idea_uid}", help="Upvote"):
+                            ideas_list = st.session_state.ideas[cat_key]
+                            for item in ideas_list:
+                                if item["id"] == idea["id"]:
+                                    if voted == "up":
+                                        item["score"] -= 1
+                                        st.session_state.voted[idea_uid] = None
+                                    else:
+                                        if voted == "down":
+                                            item["score"] += 1
+                                        item["score"] += 1
+                                        st.session_state.voted[idea_uid] = "up"
+                            st.rerun()
+                    with v2:
+                        dn_style = "🔴" if voted == "down" else "▼"
+                        if st.button(dn_style, key=f"dn_{idea_uid}", help="Downvote"):
+                            ideas_list = st.session_state.ideas[cat_key]
+                            for item in ideas_list:
+                                if item["id"] == idea["id"]:
+                                    if voted == "down":
+                                        item["score"] += 1
+                                        st.session_state.voted[idea_uid] = None
+                                    else:
+                                        if voted == "up":
+                                            item["score"] -= 1
+                                        item["score"] -= 1
+                                        st.session_state.voted[idea_uid] = "down"
+                            st.rerun()
+
+                st.markdown("</div>", unsafe_allow_html=True)
+
+                # Add idea form
+                with st.form(key=f"form_{cat_key}", clear_on_submit=True):
+                    new_text   = st.text_input("Suggestion", placeholder="Add a suggestion...", label_visibility="collapsed", key=f"text_{cat_key}")
+                    new_author = st.text_input("Your name", placeholder="Your name", label_visibility="collapsed", key=f"author_{cat_key}")
+                    submitted  = st.form_submit_button("+ Add")
+                    if submitted and new_text.strip():
+                        nid = st.session_state.next_id
+                        st.session_state.next_id += 1
+                        if cat_key not in st.session_state.ideas:
+                            st.session_state.ideas[cat_key] = []
+                        st.session_state.ideas[cat_key].append({
+                            "id": nid,
+                            "text": new_text.strip(),
+                            "author": new_author.strip() or "Anonymous",
+                            "score": 0,
+                        })
+                        st.rerun()
+
+# FOOTER
+st.markdown(f"""
+<div style="margin-top:40px;padding-top:16px;border-top:0.5px solid #C8DCC8;display:flex;justify-content:space-between;align-items:center">
+  <div style="font-size:12px;color:#9CA3AF;font-family:'DM Mono',monospace;letter-spacing:0.05em">✈️ &nbsp; BABY'S FIRST FLIGHT &nbsp;·&nbsp; SOFT GREEN · CREAM · SILVER</div>
+  <a href="{SPLITWISE_URL}" target="_blank" style="font-size:12px;color:#7A9E7E;text-decoration:none;font-family:'DM Mono',monospace">💸 Open Splitwise →</a>
+</div>""", unsafe_allow_html=True)
